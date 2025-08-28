@@ -1,4 +1,180 @@
+#---1-----从kaggle平台下载处理好的番茄数据集
 import kagglehub
-# Download latest version
 path = kagglehub.dataset_download("tomgzg/split-tomato-data-4")
 print("Path to dataset files:", path)
+'''
+Path to dataset files:将会输出下载后保存的数据路径
+'''
+
+#查看划分好的数据集路径
+import os
+base_path = "/root/.cache/kagglehub/datasets/tomgzg/split-tomato-data-4/versions/1"
+print("目录内容:", os.listdir(base_path))
+'''
+将上一步输出的数据路径复制给base_path变量
+'''
+
+#检查train、val、test的图像数据信息
+import os
+# 查看每个划分数据的数量
+for split in ['train', 'val', 'test']:
+    output_dir = '/root/.cache/kagglehub/datasets/tomgzg/split-tomato-data-4-224x224/versions/1'
+    split_path = os.path.join(output_dir, split)
+    for class_name in os.listdir(split_path):
+        class_path = os.path.join(split_path, class_name)
+        print(f"{split} - {class_name}: {len(os.listdir(class_path))} 张图像")
+
+#-----2------使用哈希值技术检查划分好的数据集中是否存在数据泄露
+import os
+import hashlib
+
+# 计算图片的哈希值
+def get_image_hash(image_path):
+    with open(image_path, "rb") as f:
+        return hashlib.md5(f.read()).hexdigest()
+
+# 检查数据泄漏
+def check_duplicates(split1, split2):
+    output_dir = '/root/.cache/kagglehub/datasets/tomgzg/split-tomato-data-4-224x224/versions/1'
+    split1_path = os.path.join(output_dir, split1)
+    split2_path = os.path.join(output_dir, split2)
+    split1_hashes = {}
+    split2_hashes = {}
+
+    # 计算第一个划分的哈希值
+    for class_name in os.listdir(split1_path):
+        class_path = os.path.join(split1_path, class_name)
+        for img_name in os.listdir(class_path):
+            img_path = os.path.join(class_path, img_name)
+            split1_hashes[get_image_hash(img_path)] = img_path
+
+    # 计算第二个划分的哈希值并检查重复
+    duplicates = []
+    for class_name in os.listdir(split2_path):
+        class_path = os.path.join(split2_path, class_name)
+        for img_name in os.listdir(class_path):
+            img_path = os.path.join(class_path, img_name)
+            img_hash = get_image_hash(img_path)
+            if img_hash in split1_hashes:
+                duplicates.append((split1_hashes[img_hash], img_path))
+
+    return duplicates
+
+# 检查训练集和测试集是否有重复图片
+duplicates = check_duplicates('train', 'test')
+if duplicates:
+    print("发现重复图片:")
+    for dup in duplicates:
+        print(f"训练集: {dup[0]} <=> 测试集: {dup[1]}")
+else:
+    print("训练集和测试集没有重复图片。")
+
+# 检查训练集和验证集是否有重复图片
+duplicates = check_duplicates('train', 'val')
+if duplicates:
+    print("发现重复图片:")
+    for dup in duplicates:
+        print(f"训练集: {dup[0]} <=> 验证集: {dup[1]}")
+else:
+    print("训练集和验证集没有重复图片。")
+
+#------3------改变图像分辨率从254到224
+import os
+from PIL import Image
+from tqdm import tqdm  # 进度条支持
+
+def center_crop_images(input_root, output_root, target_size=(224, 224)):
+    """
+    将目录中的所有图像中心裁剪到指定尺寸
+    :param input_root: 原始数据根目录
+    :param output_root: 输出数据根目录
+    :param target_size: 目标尺寸 (宽, 高)
+    """
+    # 创建输出目录结构
+    os.makedirs(output_root, exist_ok=True)
+    
+    for split in ['train', 'val', 'test']:
+        split_input = os.path.join(input_root, split)
+        split_output = os.path.join(output_root, split)
+        os.makedirs(split_output, exist_ok=True)
+        
+        for class_name in tqdm(os.listdir(split_input), desc=f"Processing {split}"):
+            class_input = os.path.join(split_input, class_name)
+            class_output = os.path.join(split_output, class_name)
+            os.makedirs(class_output, exist_ok=True)
+            
+            for img_name in os.listdir(class_input):
+                if img_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    input_path = os.path.join(class_input, img_name)
+                    output_path = os.path.join(class_output, img_name)
+                    
+                    try:
+                        # 打开图像并中心裁剪
+                        with Image.open(input_path) as img:
+                            width, height = img.size
+                            left = (width - target_size[0]) // 2
+                            top = (height - target_size[1]) // 2
+                            right = left + target_size[0]
+                            bottom = top + target_size[1]
+                            
+                            cropped_img = img.crop((left, top, right, bottom))
+                            cropped_img.save(output_path)
+                    except Exception as e:
+                        print(f"Error processing {input_path}: {str(e)}")
+
+# 配置路径
+input_root = "/root/.cache/kagglehub/datasets/tomgzg/split-tomato-data-4/versions/1"
+output_root = "/root/.cache/kagglehub/datasets/tomgzg/split-tomato-data-4-224x224/versions/1"
+
+# 执行裁剪
+center_crop_images(input_root, output_root, target_size=(224, 224))
+
+#------4----------查看是否将所有图像数据分辨率调整为224
+import os
+from PIL import Image
+from collections import defaultdict
+
+def check_resolutions(data_root):
+    splits = ['train', 'val', 'test']
+    resolution_stats = {}
+    
+    for split in splits:
+        split_path = os.path.join(data_root, split)
+        resolutions = defaultdict(int)
+        
+        for class_name in os.listdir(split_path):
+            class_path = os.path.join(split_path, class_name)
+            
+            for img_name in os.listdir(class_path):
+                if img_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    img_path = os.path.join(class_path, img_name)
+                    try:
+                        with Image.open(img_path) as img:
+                            w, h = img.size
+                            resolutions[(w, h)] += 1
+                    except Exception as e:
+                        print(f"Error processing {img_path}: {str(e)}")
+        
+        resolution_stats[split] = resolutions
+    
+    return resolution_stats
+
+# 数据集路径
+data_root = "/root/.cache/kagglehub/datasets/tomgzg/split-tomato-data-4-224x224/versions/1"
+stats = check_resolutions(data_root)
+
+# 打印结果
+for split, resolutions in stats.items():
+    print(f"\n🔍 {split.capitalize()} 集分辨率统计:")
+    total_images = sum(resolutions.values())
+    print(f"  总图像数: {total_images}")
+    
+    for (w, h), count in resolutions.items():
+        percentage = (count / total_images) * 100
+        print(f"  {w}×{h}: {count} 张 ({percentage:.2f}%)")
+    
+    # 检查是否统一
+    if len(resolutions) == 1:
+        print("✅ 所有图像分辨率一致")
+    else:
+        print("⚠️ 存在多种分辨率")
